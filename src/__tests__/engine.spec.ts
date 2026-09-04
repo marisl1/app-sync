@@ -206,6 +206,30 @@ describe('run', () => {
     expect(adapter.calls.indexOf('apply')).toBeLessThan(adapter.calls.indexOf('pending'))
   })
 
+  it('authenticates every request, not just the writes', async () => {
+    // Pull once went out with no Authorization header. The server answered 401,
+    // the engine read that as "this device was forgotten", cleared the pairing,
+    // and every sync failed while un-pairing the app. The stub records headers
+    // so that cannot come back unnoticed.
+    const seen: (string | undefined)[] = []
+    const sync = createSync({
+      adapter,
+      fetch: async (input, init) => {
+        const headers = new Headers(init?.headers)
+        seen.push(headers.get('authorization') ?? undefined)
+        return new Response(JSON.stringify({ changes: [], seq: 0, hasMore: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      },
+    })
+
+    await sync.run()
+
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every((value) => value === 'Bearer tok')).toBe(true)
+  })
+
   it('advances the cursor only after a page is applied', async () => {
     const { fetch } = stubFetch({
       'GET /api/yarnus/changes?since=0&limit=500': {

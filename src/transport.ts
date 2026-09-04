@@ -70,7 +70,14 @@ export class Transport {
   private async send(path: string, init: RequestInit = {}): Promise<Response> {
     let response: Response
     try {
-      response = await this.doFetch(`${this.base}${path}`, init)
+      // The token goes on by default. Leaving it to each call site meant `pull`
+      // silently went out unauthenticated: the server answered 401, the engine
+      // read that as "this device was forgotten" and cleared the pairing, so
+      // every sync failed and un-paired the app.
+      response = await this.doFetch(`${this.base}${path}`, {
+        ...init,
+        headers: this.headers((init.headers ?? {}) as Record<string, string>),
+      })
     } catch {
       throw new SyncError(
         'Could not reach the server. It is only reachable on the home network.',
