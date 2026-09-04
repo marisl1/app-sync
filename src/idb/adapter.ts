@@ -128,6 +128,14 @@ function announceOnCommit(transaction: IDBTransaction): void {
   }
   announced.add(transaction)
 
+  // A real IDBTransaction is an EventTarget, so this is the path that runs in
+  // every browser. Test doubles are often just `{ objectStore, oncomplete }`,
+  // and throwing at them would make this change break suites in apps that never
+  // asked for automatic sync.
+  if (typeof transaction.addEventListener !== 'function') {
+    return
+  }
+
   transaction.addEventListener('complete', () => {
     for (const listener of localListeners) {
       try {

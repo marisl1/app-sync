@@ -126,3 +126,24 @@ describe('onLocalChange', () => {
     expect(good).toBe(1)
   })
 })
+
+describe('a transaction that is not an EventTarget', () => {
+  it('is left alone rather than thrown at', () => {
+    // Apps' own tests often stand in a plain object for a transaction. Throwing
+    // at those would break suites in apps that never asked for automatic sync.
+    let fired = 0
+    stopListening.push(onLocalChange(() => (fired += 1)))
+
+    const puts: unknown[] = []
+    const fake = {
+      objectStore: () => ({
+        get: () => ({ onsuccess: null }),
+        put: (value: unknown) => puts.push(value),
+      }),
+      oncomplete: null,
+    } as unknown as IDBTransaction
+
+    expect(() => markInTransaction(fake, META, YARNS, 'y1', 1000)).not.toThrow()
+    expect(fired).toBe(0)
+  })
+})
