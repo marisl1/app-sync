@@ -1,4 +1,10 @@
-export { createIdbAdapter, IdbAdapter, markInTransaction, type IdbAdapterOptions } from './adapter.js'
+export {
+  createIdbAdapter,
+  IdbAdapter,
+  markInTransaction,
+  onLocalChange,
+  type IdbAdapterOptions,
+} from './adapter.js'
 export {
   acceptsRemote,
   metaKey,

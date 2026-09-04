@@ -101,6 +101,55 @@ export function markInTransaction(
   read.onsuccess = () => {
     store.put(nextMeta(read.result as SyncMeta | undefined, collection, id, now, deleted))
   }
+
+  announceOnCommit(transaction)
+}
+
+/** Listeners for "this device just wrote something that needs to travel". */
+const localListeners = new Set<() => void>()
+
+/** Transactions already being watched, so a batch of marks announces once. */
+const announced = new WeakSet<IDBTransaction>()
+
+/**
+ * Fires the local-change listeners once this transaction commits.
+ *
+ * **On commit, not on the mark.** A mark in a transaction that later aborts did
+ * not happen, and announcing it would start a sync that pushes nothing and
+ * reports success — the kind of thing that looks like it works until the day
+ * you check.
+ *
+ * `addEventListener` rather than `oncomplete`, because the app almost certainly
+ * set that itself and this must not quietly replace it.
+ */
+function announceOnCommit(transaction: IDBTransaction): void {
+  if (announced.has(transaction)) {
+    return
+  }
+  announced.add(transaction)
+
+  transaction.addEventListener('complete', () => {
+    for (const listener of localListeners) {
+      try {
+        listener()
+      } catch {
+        // A broken listener must not take down the write that triggered it.
+      }
+    }
+  })
+}
+
+/**
+ * Called whenever this device writes to a synced store. Returns an unsubscribe.
+ *
+ * Hung off `markInTransaction` rather than asked of each app, so automatic sync
+ * covers every write path that already syncs at all. An app cannot add a new
+ * write that pushes but does not trigger, because the mark is what makes it
+ * push in the first place.
+ */
+export function onLocalChange(listener: () => void): () => void {
+  localListeners.add(listener)
+  return () => localListeners.delete(listener)
 }
 
 interface CachedBlob {

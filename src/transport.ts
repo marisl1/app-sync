@@ -135,6 +135,86 @@ export class Transport {
     return (await response.json()) as { changes: RemoteChange[]; seq: number; hasMore: boolean }
   }
 
+  /** The server's current seq for this device's scope. The cheap "anything new?". */
+  async seq(app: string): Promise<number> {
+    const response = await this.send(`/api/${encodeURIComponent(app)}/seq`)
+    return ((await response.json()) as { seq: number }).seq
+  }
+
+  /**
+   * Opens the change stream and calls `onChange` for each notification.
+   *
+   * Read with `fetch` rather than `EventSource`, which cannot send an
+   * `Authorization` header — the alternative was putting a long-lived device
+   * token in the query string, where it would land in every access log and
+   * proxy history between here and the server.
+   *
+   * Resolves when the stream ends. `signal` is how the caller stops it.
+   */
+  async stream(app: string, onChange: (seq: number) => void, signal: AbortSignal): Promise<void> {
+    let response: Response
+    try {
+      response = await this.doFetch(`${this.base}/api/${encodeURIComponent(app)}/events`, {
+        headers: this.headers({ accept: 'text/event-stream' }),
+        signal,
+      })
+    } catch {
+      throw new SyncError('Could not open the change stream.')
+    }
+
+    if (response.status === 401) {
+      throw new NotPairedError()
+    }
+    if (!response.ok || response.body === null) {
+      throw new SyncError('The server would not open a change stream.', response.status)
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          return
+        }
+
+        buffer += decoder.decode(value, { stream: true })
+
+        // Events are separated by a blank line. Anything after the last one is
+        // a partial event and stays in the buffer for the next chunk.
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+
+        for (const part of parts) {
+          if (!part.includes('event: changed')) {
+            continue
+          }
+          const data = /^data: (.*)$/m.exec(part)?.[1]
+          if (data === undefined) {
+            continue
+          }
+          try {
+            const parsed = JSON.parse(data) as { seq?: unknown }
+            onChange(typeof parsed.seq === 'number' ? parsed.seq : 0)
+          } catch {
+            // A malformed notification is only ever a hint that something
+            // changed; syncing anyway is the safe reading of it.
+            onChange(0)
+          }
+        }
+      }
+    } finally {
+      // Releasing the lock lets the connection actually close on abort.
+      try {
+        reader.releaseLock()
+      } catch {
+        // Already released.
+      }
+    }
+  }
+
   async push(
     app: string,
     changes: unknown[],

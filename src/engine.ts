@@ -256,6 +256,29 @@ export class Sync {
 
     return uploaded
   }
+
+  /**
+   * Holds the change stream open, calling `onChange` when the server has news.
+   *
+   * Lives on the engine rather than being reached through the transport by
+   * callers, so the device token stays this class's business.
+   */
+  async stream(app: string, onChange: (seq: number) => void, signal: AbortSignal): Promise<void> {
+    const state = await this.adapter.loadState()
+    if (state === null || state.deviceToken === '') {
+      throw new NotPairedError()
+    }
+    return this.transport(state).stream(app, onChange, signal)
+  }
+
+  /** The server's seq for this device's scope, without syncing anything. */
+  async serverSeq(app: string): Promise<number> {
+    const state = await this.adapter.loadState()
+    if (state === null || state.deviceToken === '') {
+      throw new NotPairedError()
+    }
+    return this.transport(state).seq(app)
+  }
 }
 
 export function createSync(options: SyncOptions): Sync {
