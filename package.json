@@ -1,6 +1,6 @@
 {
   "name": "app-sync",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Record-level sync client for the household apps that talk to app-server.",
   "type": "module",
   "license": "UNLICENSED",

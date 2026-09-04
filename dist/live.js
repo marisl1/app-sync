@@ -80,12 +80,20 @@ export function startLive(sync, app, options = {}) {
         while (!stopped) {
             controller = new AbortController();
             try {
-                // Catch up first: anything that changed while the stream was down is
-                // waiting, and no notification is coming for it.
-                schedule(remoteDelay);
-                setConnected(true);
-                backoff = BACKOFF_START_MS;
-                await sync.stream(app, () => schedule(remoteDelay), controller.signal);
+                // Both of these wait for the stream to actually open.
+                //
+                // Catching up on every *attempt* instead is what made a device with no
+                // stream — an old server, a proxy in the way — sync roughly once a
+                // second: the backoff starts at one second, and each retry queued a full
+                // run. On the server's dashboard that device's "last seen" flickered
+                // constantly, which looks like a busy device rather than a failing one.
+                await sync.stream(app, () => schedule(remoteDelay), controller.signal, () => {
+                    setConnected(true);
+                    backoff = BACKOFF_START_MS;
+                    // Anything that changed while the stream was down is waiting, and no
+                    // notification is coming for it.
+                    schedule(remoteDelay);
+                });
             }
             catch (cause) {
                 if (cause instanceof NotPairedError) {

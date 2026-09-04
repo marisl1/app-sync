@@ -51,7 +51,7 @@ export declare class Sync {
      * Lives on the engine rather than being reached through the transport by
      * callers, so the device token stays this class's business.
      */
-    stream(app: string, onChange: (seq: number) => void, signal: AbortSignal): Promise<void>;
+    stream(app: string, onChange: (seq: number) => void, signal: AbortSignal, onOpen?: () => void): Promise<void>;
     /** The server's seq for this device's scope, without syncing anything. */
     serverSeq(app: string): Promise<number>;
 }

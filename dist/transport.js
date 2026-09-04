@@ -117,7 +117,7 @@ export class Transport {
      *
      * Resolves when the stream ends. `signal` is how the caller stops it.
      */
-    async stream(app, onChange, signal) {
+    async stream(app, onChange, signal, onOpen) {
         let response;
         try {
             response = await this.doFetch(`${this.base}/api/${encodeURIComponent(app)}/events`, {
@@ -134,6 +134,10 @@ export class Transport {
         if (!response.ok || response.body === null) {
             throw new SyncError('The server would not open a change stream.', response.status);
         }
+        // Only now is the stream genuinely open. Callers use this to say
+        // "connected" and to catch up on what they missed — doing either before the
+        // response arrives claims a connection that may be about to 404.
+        onOpen?.();
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';

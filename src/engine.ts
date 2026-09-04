@@ -263,12 +263,17 @@ export class Sync {
    * Lives on the engine rather than being reached through the transport by
    * callers, so the device token stays this class's business.
    */
-  async stream(app: string, onChange: (seq: number) => void, signal: AbortSignal): Promise<void> {
+  async stream(
+    app: string,
+    onChange: (seq: number) => void,
+    signal: AbortSignal,
+    onOpen?: () => void,
+  ): Promise<void> {
     const state = await this.adapter.loadState()
     if (state === null || state.deviceToken === '') {
       throw new NotPairedError()
     }
-    return this.transport(state).stream(app, onChange, signal)
+    return this.transport(state).stream(app, onChange, signal, onOpen)
   }
 
   /** The server's seq for this device's scope, without syncing anything. */

@@ -31,11 +31,18 @@ function stubSync(overrides: Partial<Record<'run' | 'stream', unknown>> = {}) {
       runs.push(Date.now())
       return REPORT
     }),
-    stream: vi.fn(async (_app: string, onChange: (seq: number) => void, signal: AbortSignal) => {
+    stream: vi.fn(
+      async (
+        _app: string,
+        onChange: (seq: number) => void,
+        signal: AbortSignal,
+        onOpen?: () => void,
+      ) => {
       if (streamRejects !== null) {
         throw streamRejects
       }
       notify = onChange
+      onOpen?.()
       // Resolves only when the caller aborts, like the real one.
       await new Promise<void>((resolve) => {
         if (signal.aborted) {
@@ -44,7 +51,8 @@ function stubSync(overrides: Partial<Record<'run' | 'stream', unknown>> = {}) {
         }
         signal.addEventListener('abort', () => resolve())
       })
-    }),
+      },
+    ),
     ...overrides,
   } as unknown as Sync
 
@@ -328,6 +336,67 @@ describe('startLive', () => {
     await vi.advanceTimersByTimeAsync(50)
 
     expect((stub.sync.run as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before + 1)
+    live.stop()
+  })
+})
+
+describe('when the stream cannot be opened at all', () => {
+  it('does not sync once per retry', async () => {
+    // The bug this pins: catching up on every reconnect *attempt* meant a device
+    // with no stream — an old server, a proxy in the way — synced about once a
+    // second, because the backoff starts at one second. On the server's
+    // dashboard that device's "last seen" flickered constantly, which reads as a
+    // busy device rather than a failing one.
+    const stub = stubSync()
+    stub.breakStream(new Error('404: this server has no event stream'))
+
+    const live = startLive(stub.sync, 'yarnus', {
+      remoteDelayMs: 10,
+      pollMs: 60_000,
+      watchLocal: () => () => {},
+    })
+
+    // One catch-up at start-up is expected. Ten seconds of failing reconnects
+    // should add nothing on top of it.
+    await vi.advanceTimersByTimeAsync(100)
+    const afterStartup = (stub.sync.run as ReturnType<typeof vi.fn>).mock.calls.length
+    expect(afterStartup).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    expect((stub.sync.run as ReturnType<typeof vi.fn>).mock.calls.length).toBe(afterStartup)
+    expect((stub.sync.stream as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1)
+    live.stop()
+  })
+
+  it('never claims to be connected', async () => {
+    const stub = stubSync()
+    stub.breakStream(new Error('no stream'))
+    const states: boolean[] = []
+
+    const live = startLive(stub.sync, 'yarnus', {
+      watchLocal: () => () => {},
+      onConnectionChange: (value) => states.push(value),
+    })
+
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(states).not.toContain(true)
+    live.stop()
+  })
+
+  it('says connected only once the stream is really open', async () => {
+    const stub = stubSync()
+    const states: boolean[] = []
+
+    const live = startLive(stub.sync, 'yarnus', {
+      watchLocal: () => () => {},
+      onConnectionChange: (value) => states.push(value),
+    })
+
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(states[0]).toBe(true)
     live.stop()
   })
 })

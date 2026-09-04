@@ -44,7 +44,7 @@ export declare class Transport {
      *
      * Resolves when the stream ends. `signal` is how the caller stops it.
      */
-    stream(app: string, onChange: (seq: number) => void, signal: AbortSignal): Promise<void>;
+    stream(app: string, onChange: (seq: number) => void, signal: AbortSignal, onOpen?: () => void): Promise<void>;
     push(app: string, changes: unknown[]): Promise<{
         results: SettleResult[];
         seq: number;
