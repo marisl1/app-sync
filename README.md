@@ -105,3 +105,16 @@ npm test
 The engine is tested against a fake adapter and a stub fetch. The protocol
 itself is covered by a contract test in `app-server`, which drives this package
 against a real server on a real database — no mocks on either side.
+
+## Why `dist/` is committed
+
+Because this is installed straight from git, and a git dependency that builds
+itself on install is only as reliable as the install actually running its
+`prepare` script. On Vercel it did not: the build was handed a `dist/` from an
+older commit and failed with `"startLive" is not exported by
+app-sync/dist/index.js` — an error that points squarely at the consuming app and
+says nothing at all about the stale artifact behind it.
+
+So the build output is checked in, and the package needs no build step to be
+usable. `pretest` rebuilds it, so running the tests before a commit — the habit
+here anyway — keeps `dist/` from drifting away from `src/`.
