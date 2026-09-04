@@ -156,7 +156,7 @@ describe('pairing', () => {
     expect(state.cursor).toBe(0)
     // The trailing slash is normalised away or every path becomes `//api/...`.
     expect(state.serverUrl).toBe('https://server:8443')
-    expect(adapter.state?.deviceToken).toBe('t1')
+    expect((await adapter.loadState())?.deviceToken).toBe('t1')
   })
 
   it('reports a wrong code plainly instead of asking to pair again', async () => {
