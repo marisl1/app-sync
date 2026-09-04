@@ -45,7 +45,7 @@ export interface SettleResult {
 
 /** Everything needed to resume syncing, held in the app's own storage. */
 export interface SyncState {
-  /** Origin of the server, e.g. `https://192.168.0.72:8443`. No trailing slash. */
+  /** Origin of the server, e.g. `https://homeserver.lan:8443`. No trailing slash. */
   serverUrl: string
   deviceToken: string
   deviceId: string

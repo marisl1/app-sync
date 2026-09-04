@@ -21,7 +21,7 @@ import { createSync } from 'app-sync'
 
 const sync = createSync({ adapter })
 
-await sync.pair('https://192.168.0.72:8443', 'PAIRCODE', 'Pixel')
+await sync.pair('https://homeserver.lan:8443', 'PAIRCODE', 'Pixel')
 const report = await sync.run()
 ```
 
