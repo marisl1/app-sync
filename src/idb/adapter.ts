@@ -19,6 +19,13 @@ import type {
   SyncState,
 } from '../types.js'
 import { acceptsRemote, metaKey, nextMeta, remoteMeta, settledMeta, type SyncMeta } from './meta.js'
+import {
+  decodeDataUrl,
+  encodeDataUrl,
+  hashBytes,
+  isBlobMarker,
+  type BlobMarker,
+} from './blobs.js'
 
 const STATE_KEY = 'state'
 
@@ -33,6 +40,22 @@ export interface IdbAdapterOptions {
   metaStore: string
   /** Store holding the single sync state row, keyed `key`. */
   stateStore: string
+  /**
+   * Fields holding a data URL, by collection — e.g. `{ 'yarn/photos': 'dataUrl' }`.
+   *
+   * Named fields travel as content-addressed bytes instead of inside the
+   * payload, so twenty retained versions of a photo record cost one copy of the
+   * picture rather than twenty. Requires `blobStore`.
+   */
+  binaryFields?: Record<string, string>
+  /**
+   * Store caching those bytes locally, keyed `hash`, holding `{ hash, dataUrl }`.
+   *
+   * Marked `local: true` in the app's schema: it is derived from records that
+   * are themselves backed up, so backing it up too would store every picture
+   * twice.
+   */
+  blobStore?: string
   blobs?: BlobStore
 }
 
@@ -80,15 +103,66 @@ export function markInTransaction(
   }
 }
 
+interface CachedBlob {
+  hash: string
+  /** Kept as a data URL, not bytes: a Uint8Array comes back from JSON as {}. */
+  dataUrl: string
+}
+
 export class IdbAdapter implements SyncAdapter {
   readonly app: string
   readonly blobs?: BlobStore
 
   constructor(private readonly options: IdbAdapterOptions) {
     this.app = options.app
+
     if (options.blobs !== undefined) {
       this.blobs = options.blobs
+    } else if (options.blobStore !== undefined) {
+      this.blobs = this.cacheStore(options.blobStore)
     }
+  }
+
+  /** The engine's view of the local byte cache. */
+  private cacheStore(store: string): BlobStore {
+    const open = () => this.options.openDatabase()
+
+    return {
+      has: async (hash) => {
+        const db = await open()
+        const transaction = db.transaction([store], 'readonly')
+        const row = await request<CachedBlob | undefined>(
+          transaction.objectStore(store).get(hash) as IDBRequest<CachedBlob | undefined>,
+        )
+        await committed(transaction)
+        return row !== undefined
+      },
+      read: async (hash) => {
+        const db = await open()
+        const transaction = db.transaction([store], 'readonly')
+        const row = await request<CachedBlob | undefined>(
+          transaction.objectStore(store).get(hash) as IDBRequest<CachedBlob | undefined>,
+        )
+        await committed(transaction)
+        return row === undefined ? null : (decodeDataUrl(row.dataUrl)?.bytes ?? null)
+      },
+      write: async (hash, bytes) => {
+        const db = await open()
+        const transaction = db.transaction([store], 'readwrite')
+        // The mime is not known here — the engine only moves bytes. It is
+        // recovered from the marker when the record is applied, so what is
+        // cached is a plain octet-stream data URL and the record gets the
+        // right type put back on it.
+        transaction
+          .objectStore(store)
+          .put({ hash, dataUrl: encodeDataUrl('application/octet-stream', bytes) })
+        await committed(transaction)
+      },
+    }
+  }
+
+  private binaryField(collection: string): string | undefined {
+    return this.options.binaryFields?.[collection]
   }
 
   private syncs(collection: string): boolean {
@@ -154,18 +228,69 @@ export class IdbAdapter implements SyncAdapter {
         continue
       }
 
+      const { payload, blobHashes } = await this.detach(meta.collection, record)
+
       changes.push({
         collection: meta.collection,
         id: meta.id,
         updatedAt: meta.updatedAt,
         deleted: false,
-        payload: JSON.stringify(record),
-        blobHashes: [],
+        payload,
+        blobHashes,
         baseSeq: meta.seq,
       })
     }
 
     return changes
+  }
+
+  /**
+   * Replaces a record's data-URL field with a marker naming its content hash,
+   * caching the bytes so the engine can upload them.
+   *
+   * Returns the record untouched when the collection has no binary field, or
+   * when the field does not hold a data URL — a record written by an older
+   * build, or one that already carries a marker because it came from the
+   * server and has not been re-saved since.
+   */
+  private async detach(
+    collection: string,
+    record: unknown,
+  ): Promise<{ payload: string; blobHashes: string[] }> {
+    const field = this.binaryField(collection)
+    const store = this.options.blobStore
+
+    if (field === undefined || store === undefined || typeof record !== 'object' || record === null) {
+      return { payload: JSON.stringify(record), blobHashes: [] }
+    }
+
+    const value = (record as Record<string, unknown>)[field]
+
+    // Already a marker: this record came down from the server and nothing here
+    // has changed it, so it is pushed back exactly as it arrived.
+    if (isBlobMarker(value)) {
+      return { payload: JSON.stringify(record), blobHashes: [value.$blob] }
+    }
+
+    const decoded = decodeDataUrl(value)
+    if (decoded === null) {
+      return { payload: JSON.stringify(record), blobHashes: [] }
+    }
+
+    const hash = await hashBytes(decoded.bytes)
+
+    const db = await this.options.openDatabase()
+    const transaction = db.transaction([store], 'readwrite')
+    // Cached with its real mime, so a record applied on this device gets the
+    // right type back rather than octet-stream.
+    transaction.objectStore(store).put({ hash, dataUrl: value as string } satisfies CachedBlob)
+    await committed(transaction)
+
+    const marker: BlobMarker = { $blob: hash, mime: decoded.mime }
+    return {
+      payload: JSON.stringify({ ...(record as Record<string, unknown>), [field]: marker }),
+      blobHashes: [hash],
+    }
   }
 
   /**
@@ -184,10 +309,27 @@ export class IdbAdapter implements SyncAdapter {
     }
 
     const db = await this.options.openDatabase()
-    const { metaStore } = this.options
+    const { metaStore, blobStore } = this.options
     const stores = [...new Set(changes.map((c) => c.collection))].filter((c) => this.syncs(c))
 
-    const transaction = db.transaction([...stores, metaStore], 'readwrite')
+    // Markers are resolved before the write transaction opens: reading the byte
+    // cache is itself a transaction, and IndexedDB commits an idle one the
+    // moment control returns to the event loop.
+    const resolved = new Map<string, unknown>()
+    for (const change of changes) {
+      if (change.deleted || !this.syncs(change.collection)) {
+        continue
+      }
+      const record = await this.attach(change)
+      if (record !== undefined) {
+        resolved.set(`${change.collection}/${change.id}`, record)
+      }
+    }
+
+    const transaction = db.transaction(
+      blobStore === undefined ? [...stores, metaStore] : [...stores, metaStore],
+      'readwrite',
+    )
     const meta = transaction.objectStore(metaStore)
 
     for (const change of changes) {
@@ -200,9 +342,8 @@ export class IdbAdapter implements SyncAdapter {
 
       let parsed: unknown
       if (!change.deleted) {
-        try {
-          parsed = JSON.parse(change.payload)
-        } catch {
+        parsed = resolved.get(`${change.collection}/${change.id}`)
+        if (parsed === undefined) {
           // Unparseable payload: skip the record rather than abort the page and
           // stall every later change behind it.
           continue
@@ -229,6 +370,43 @@ export class IdbAdapter implements SyncAdapter {
     }
 
     await committed(transaction)
+  }
+
+  /**
+   * Parses a pulled payload and puts any blob marker back as a data URL.
+   *
+   * A marker whose bytes are missing leaves the field absent rather than
+   * failing: the server may legitimately not hold them yet, and the record is
+   * still worth having. The app shows whatever it shows for a picture-less
+   * record, which every one of these apps already handles.
+   */
+  private async attach(change: RemoteChange): Promise<unknown> {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(change.payload)
+    } catch {
+      return undefined
+    }
+
+    const field = this.binaryField(change.collection)
+    if (field === undefined || typeof parsed !== 'object' || parsed === null) {
+      return parsed
+    }
+
+    const record = parsed as Record<string, unknown>
+    const marker = record[field]
+    if (!isBlobMarker(marker)) {
+      // An older build's record, with the picture still inside the payload.
+      return record
+    }
+
+    const bytes = (await this.blobs?.read(marker.$blob)) ?? null
+    if (bytes === null) {
+      const { [field]: _absent, ...rest } = record
+      return rest
+    }
+
+    return { ...record, [field]: encodeDataUrl(marker.mime, bytes) }
   }
 
   async settle(results: SettleResult[]): Promise<void> {
