@@ -99,13 +99,14 @@ export class Transport {
     app: string,
     code: string,
     deviceName: string,
-  ): Promise<{ deviceId: string; token: string }> {
+    user: string,
+  ): Promise<{ deviceId: string; token: string; user: string }> {
     let response: Response
     try {
       response = await this.doFetch(`${this.base}/api/pair`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ app, code, name: deviceName }),
+        body: JSON.stringify({ app, code, name: deviceName, user }),
       })
     } catch {
       throw new SyncError('Could not reach the server at that address.')
@@ -120,7 +121,7 @@ export class Transport {
       throw new SyncError(await readError(response), response.status)
     }
 
-    return (await response.json()) as { deviceId: string; token: string }
+    return (await response.json()) as { deviceId: string; token: string; user: string }
   }
 
   async pull(

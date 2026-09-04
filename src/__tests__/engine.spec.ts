@@ -20,6 +20,7 @@ class FakeAdapter implements SyncAdapter {
     serverUrl: 'https://server:8443',
     deviceToken: 'tok',
     deviceId: 'dev',
+    user: 'home',
     cursor: 0,
   }
   queue: LocalChange[] = []
@@ -144,16 +145,19 @@ describe('pairing', () => {
   it('stores the token and starts the cursor at zero', async () => {
     adapter.state = null
     const { fetch } = stubFetch({
-      'POST /api/pair': { body: { deviceId: 'd1', token: 't1' } },
+      'POST /api/pair': { body: { deviceId: 'd1', token: 't1', user: 'maris' } },
     })
 
     const sync = createSync({ adapter, fetch })
-    const state = await sync.pair('https://server:8443/', 'CODE', 'Pixel')
+    const state = await sync.pair('https://server:8443/', 'CODE', 'Pixel', 'Maris')
 
     expect(state.deviceToken).toBe('t1')
     // A fresh device pulls everything before it pushes, so it adopts an
     // existing library rather than fighting it.
     expect(state.cursor).toBe(0)
+    // The server's normalised form of what was typed, not the raw input:
+    // "Maris" and "maris " have to be the same person.
+    expect(state.user).toBe('maris')
     // The trailing slash is normalised away or every path becomes `//api/...`.
     expect(state.serverUrl).toBe('https://server:8443')
     expect((await adapter.loadState())?.deviceToken).toBe('t1')
@@ -163,7 +167,7 @@ describe('pairing', () => {
     adapter.state = null
     const { fetch } = stubFetch({ 'POST /api/pair': { status: 401 } })
 
-    await expect(createSync({ adapter, fetch }).pair('https://s', 'BAD', 'Pixel')).rejects.toThrow(
+    await expect(createSync({ adapter, fetch }).pair('https://s', 'BAD', 'Pixel', 'maris')).rejects.toThrow(
       /not right/i,
     )
   })

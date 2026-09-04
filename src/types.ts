@@ -49,6 +49,12 @@ export interface SyncState {
   serverUrl: string
   deviceToken: string
   deviceId: string
+  /**
+   * Which person on the server this device belongs to, as the server
+   * normalised it. Kept for display only: every request derives the user from
+   * the token, so nothing is trusted to send it back.
+   */
+  user: string
   /** The highest seq this client has pulled and applied. */
   cursor: number
 }

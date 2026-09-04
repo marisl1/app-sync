@@ -59,18 +59,25 @@ export class Sync {
    * server holds before it pushes anything — which is what lets a second device
    * adopt an existing library instead of fighting it.
    */
-  async pair(serverUrl: string, code: string, deviceName: string): Promise<SyncState> {
+  async pair(
+    serverUrl: string,
+    code: string,
+    deviceName: string,
+    user: string,
+  ): Promise<SyncState> {
     const transport = new Transport({
       serverUrl,
       ...(this.fetchImpl === undefined ? {} : { fetch: this.fetchImpl }),
     })
 
-    const { deviceId, token } = await transport.pair(this.adapter.app, code, deviceName)
+    const paired = await transport.pair(this.adapter.app, code, deviceName, user)
 
     const state: SyncState = {
       serverUrl: serverUrl.replace(/\/+$/, ''),
-      deviceToken: token,
-      deviceId,
+      deviceToken: paired.token,
+      deviceId: paired.deviceId,
+      // The server's normalised form, not what was typed.
+      user: paired.user,
       cursor: 0,
     }
     await this.adapter.saveState(state)
