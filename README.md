@@ -106,6 +106,17 @@ The engine is tested against a fake adapter and a stub fetch. The protocol
 itself is covered by a contract test in `app-server`, which drives this package
 against a real server on a real database — no mocks on either side.
 
+## Bump the version on every change
+
+**`npm version patch` (or minor) before pushing, always.** This is installed from
+git, and npm decides whether an installed tree is up to date by name and version
+— never by commit. With the version left alone, an environment that has a cached
+`node_modules` sees `app-sync@0.1.0` already present, says *up to date in 2s*,
+and quietly keeps the old code however many times the lockfile's commit changes.
+
+That is exactly how a Vercel build failed on exports that were plainly in `main`:
+the deploy had never fetched the commit containing them.
+
 ## Why `dist/` is committed
 
 Because this is installed straight from git, and a git dependency that builds
