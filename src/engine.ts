@@ -27,6 +27,7 @@ export class Sync {
   private readonly pullLimit: number
   private readonly pushLimit: number
   private readonly fetchImpl: FetchLike | undefined
+  private backfilled = false
 
   constructor(options: SyncOptions) {
     this.adapter = options.adapter
@@ -111,6 +112,8 @@ export class Sync {
     try {
       const transport = this.transport(state)
 
+      await this.backfillOnce()
+
       report.pulled = await this.pull(transport, state, report)
       const pushed = await this.push(transport, report)
       report.pushed = pushed
@@ -126,6 +129,34 @@ export class Sync {
       report.error =
         cause instanceof SyncError ? cause.message : `Sync failed: ${String(cause)}`
       return report
+    }
+  }
+
+  /**
+   * Queues anything stored that sync has never heard of, once per session.
+   *
+   * Pairing used to be the only place this happened, which was enough only as
+   * long as the synced set never grew. Add a store to it afterwards — or fix a
+   * backfill that had been skipping one — and an already-paired device has
+   * nothing that would ever queue those records: sync keeps reporting success
+   * while quietly pushing none of them. ml-app's cover images sat on a phone
+   * that way.
+   *
+   * Once per session rather than per run: the auto-sync loop ticks often, and
+   * this reads all of the bookkeeping. A failure is swallowed on purpose —
+   * backfill is an optimisation over "the user edits each record again", and it
+   * must never be the reason a sync that would otherwise work does not.
+   */
+  private async backfillOnce(): Promise<void> {
+    if (this.backfilled || this.adapter.backfill === undefined) {
+      return
+    }
+    this.backfilled = true
+
+    try {
+      await this.adapter.backfill()
+    } catch {
+      // Nothing here is worth failing a sync over.
     }
   }
 

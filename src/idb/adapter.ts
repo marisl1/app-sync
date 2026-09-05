@@ -540,6 +540,14 @@ export class IdbAdapter implements SyncAdapter {
    * Idempotent: a record that already has a row is left exactly as it is, so it
    * is safe on every start. It never clears a dirty flag and never touches
    * `seq`, so it cannot undo work the engine has done.
+   *
+   * The ids come from `getAllKeys`, which asks the store for its own primary
+   * keys rather than assuming they live on a field called `id`. Reading
+   * `record.id` looked equivalent and was not: ml-app's `media/covers` keys on
+   * `itemId`, so every cover was skipped, and the count still looked right
+   * because the items beside them queued fine. Keys are also all this needs —
+   * `getAll` was loading every record, which for a store of cover images meant
+   * pulling tens of megabytes of base64 into memory to read one field off each.
    */
   async backfill(now: number = Date.now()): Promise<number> {
     const db = await this.options.openDatabase()
@@ -553,22 +561,22 @@ export class IdbAdapter implements SyncAdapter {
     )
     const perCollection = await Promise.all(
       collections.map((collection) =>
-        request<{ id?: unknown }[]>(
-          read.objectStore(collection).getAll() as IDBRequest<{ id?: unknown }[]>,
-        ),
+        request<IDBValidKey[]>(read.objectStore(collection).getAllKeys()),
       ),
     )
     await committed(read)
 
     const missing: { collection: string; id: string }[] = []
     for (const [index, collection] of collections.entries()) {
-      for (const record of perCollection[index] ?? []) {
-        const id = record.id
-        if (typeof id !== 'string' || id === '') {
+      for (const key of perCollection[index] ?? []) {
+        // The protocol's id is a string. A store keyed on a number or a
+        // compound key has nothing this can send, and skipping it here is the
+        // same answer `pending` would give.
+        if (typeof key !== 'string' || key === '') {
           continue
         }
-        if (!existing.has(metaKey(collection, id))) {
-          missing.push({ collection, id })
+        if (!existing.has(metaKey(collection, key))) {
+          missing.push({ collection, id: key })
         }
       }
     }

@@ -92,6 +92,18 @@ export interface SyncAdapter {
   saveState(state: SyncState): Promise<void>
   clearState(): Promise<void>
 
+  /**
+   * Queues stored records that have no sync metadata yet.
+   *
+   * Optional because not every adapter has records that predate its
+   * bookkeeping. An adapter that implements it must be idempotent: the engine
+   * calls it once per session, not only at pairing, because a store added to
+   * the synced set after a device paired would otherwise never travel — and
+   * would never say so, since sync would report success and simply push
+   * nothing.
+   */
+  backfill?(now?: number): Promise<number>
+
   blobs?: BlobStore
 }
 

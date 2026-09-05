@@ -50,6 +50,13 @@ class FakeAdapter implements SyncAdapter {
   async clearState(): Promise<void> {
     this.state = null
   }
+
+  backfilled = 0
+  async backfill(): Promise<number> {
+    this.calls.push('backfill')
+    this.backfilled += 1
+    return 0
+  }
 }
 
 class FakeBlobs implements BlobStore {
@@ -432,5 +439,61 @@ describe('blobs', () => {
     // thumbnail would strand everything else.
     expect(report.ok).toBe(true)
     expect(adapter.applied[0]).toHaveLength(1)
+  })
+})
+
+// Backfill used to run only at pairing. That left an already-paired device with
+// no way to queue anything it had not queued then — which is exactly what
+// happened to ml-app's cover images: they were skipped by a backfill bug, and
+// after it was fixed there was still nothing that would run it again.
+describe('backfill on run', () => {
+  it('queues unsynced records before pushing', async () => {
+    const { fetch } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 0, hasMore: false } },
+    })
+    await createSync({ adapter, fetch }).run()
+
+    expect(adapter.backfilled).toBe(1)
+    expect(adapter.calls.indexOf('backfill')).toBeLessThan(adapter.calls.indexOf('pending'))
+  })
+
+  it('runs once per session, not on every tick of the auto-sync loop', async () => {
+    const { fetch } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 0, hasMore: false } },
+    })
+    const sync = createSync({ adapter, fetch })
+
+    await sync.run()
+    await sync.run()
+    await sync.run()
+
+    expect(adapter.backfilled).toBe(1)
+  })
+
+  it('does not run for an unpaired app, which has nowhere to send anything', async () => {
+    adapter.state = null
+    const { fetch } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 0, hasMore: false } },
+    })
+    await createSync({ adapter, fetch }).run()
+
+    expect(adapter.backfilled).toBe(0)
+  })
+
+  it('still syncs when the adapter has no backfill at all', async () => {
+    const plain: SyncAdapter = {
+      app: 'yarnus',
+      pending: async () => [],
+      apply: async () => undefined,
+      settle: async () => undefined,
+      loadState: async () => adapter.state,
+      saveState: async () => undefined,
+      clearState: async () => undefined,
+    }
+
+    const { fetch } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 0, hasMore: false } },
+    })
+    expect((await createSync({ adapter: plain, fetch }).run()).ok).toBe(true)
   })
 })

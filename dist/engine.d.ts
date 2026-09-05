@@ -12,6 +12,7 @@ export declare class Sync {
     private readonly pullLimit;
     private readonly pushLimit;
     private readonly fetchImpl;
+    private backfilled;
     constructor(options: SyncOptions);
     private transport;
     isPaired(): Promise<boolean>;
@@ -27,6 +28,22 @@ export declare class Sync {
     unpair(): Promise<void>;
     /** One full cycle. Never throws: failures come back in the report. */
     run(): Promise<SyncReport>;
+    /**
+     * Queues anything stored that sync has never heard of, once per session.
+     *
+     * Pairing used to be the only place this happened, which was enough only as
+     * long as the synced set never grew. Add a store to it afterwards — or fix a
+     * backfill that had been skipping one — and an already-paired device has
+     * nothing that would ever queue those records: sync keeps reporting success
+     * while quietly pushing none of them. ml-app's cover images sat on a phone
+     * that way.
+     *
+     * Once per session rather than per run: the auto-sync loop ticks often, and
+     * this reads all of the bookkeeping. A failure is swallowed on purpose —
+     * backfill is an optimisation over "the user edits each record again", and it
+     * must never be the reason a sync that would otherwise work does not.
+     */
+    private backfillOnce;
     /**
      * Pulls every page since the cursor, applying as it goes.
      *

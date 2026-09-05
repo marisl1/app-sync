@@ -39,7 +39,7 @@ function open(): Promise<IDBDatabase> {
   })
 }
 
-async function writeRecord(store: string, value: { id: string }, now: number): Promise<void> {
+async function writeRecord(store: string, value: { id: string } & Record<string, unknown>, now: number): Promise<void> {
   const { markInTransaction } = await import('../adapter.js')
   const db = await open()
   const transaction = db.transaction([store, META], 'readwrite')
