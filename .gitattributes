@@ -1,0 +1,16 @@
+# `dist/` is committed on purpose — a consumer pulling this in as a git
+# dependency builds from what is here — so it has to compare cleanly against a
+# fresh build, and it did not.
+#
+# tsc writes LF, and the blobs in the index are LF. But this machine has
+# `core.autocrlf=true`, so a checkout wrote them back out as CRLF, and the next
+# build overwrote that with LF again. The whole directory then showed as
+# modified with an empty diff: content identical, endings not.
+#
+# It surfaced on any `npm install` in a consumer, not just a deliberate build —
+# a symlinked `file:` dependency runs its own `prepare`, so app-server's installs
+# were rebuilding this in place and leaving it looking like a stale dist.
+#
+# Pinning the checkout to LF is the fix: the working copy now matches both the
+# index and what the compiler emits, so the round-trip is stable.
+dist/** text eol=lf
