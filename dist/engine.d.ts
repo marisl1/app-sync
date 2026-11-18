@@ -54,6 +54,10 @@ export declare class Sync {
     private pull;
     /** Downloads bytes this device does not have. A missing blob is not fatal. */
     private fetchMissingBlobs;
+    /**
+     * Pushes every pending change. Also returns the lowest seq the server named
+     * for an edit that lost, or null when none did: `run` pulls again from there.
+     */
     private push;
     /**
      * Uploads bytes the server lacks, before the records that reference them.
