@@ -115,8 +115,21 @@ export class Sync {
       await this.backfillOnce()
 
       report.pulled = await this.pull(transport, state, report)
-      const pushed = await this.push(transport, report)
+      const { pushed, lowestSuperseded } = await this.push(transport, report)
       report.pushed = pushed
+
+      // A losing edit was dirty when the pull above went past the winner, so
+      // the winner was skipped and the cursor is already beyond it. The push
+      // has cleared the edit, so pulling again from just below the earliest
+      // winner lands it. Never forward: that would skip what is in between.
+      if (lowestSuperseded !== null) {
+        const cursor = Math.min(state.cursor, Math.max(0, lowestSuperseded - 1))
+        if (cursor !== state.cursor) {
+          state.cursor = cursor
+          await this.adapter.saveState({ ...state })
+        }
+        report.pulled += await this.pull(transport, state, report)
+      }
 
       report.ok = true
       return report
@@ -220,8 +233,16 @@ export class Sync {
     }
   }
 
-  private async push(transport: Transport, report: SyncReport): Promise<number> {
+  /**
+   * Pushes every pending change. Also returns the lowest seq the server named
+   * for an edit that lost, or null when none did: `run` pulls again from there.
+   */
+  private async push(
+    transport: Transport,
+    report: SyncReport,
+  ): Promise<{ pushed: number; lowestSuperseded: number | null }> {
     let pushed = 0
+    let lowestSuperseded: number | null = null
 
     for (;;) {
       const pending = await this.adapter.pending(this.pushLimit)
@@ -237,6 +258,8 @@ export class Sync {
       for (const result of results) {
         if (result.outcome === 'superseded') {
           report.superseded += 1
+          // The server answers a losing push with the record's current seq.
+          lowestSuperseded = Math.min(lowestSuperseded ?? result.seq, result.seq)
         } else if (result.outcome === 'conflict') {
           report.conflicts += 1
         }
@@ -251,7 +274,7 @@ export class Sync {
       }
     }
 
-    return pushed
+    return { pushed, lowestSuperseded }
   }
 
   /**

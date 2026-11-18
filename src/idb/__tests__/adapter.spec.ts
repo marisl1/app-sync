@@ -204,6 +204,21 @@ describe('settle', () => {
     // Leaving it dirty would resend a losing edit on every sync, forever.
     expect(await adapter.pending(50)).toEqual([])
   })
+
+  it('takes the winner when it is pulled again after a losing push', async () => {
+    await writeRecord('y1', 'Mine', 1000)
+    const winner = remote('y1', 9, '{"id":"y1","name":"Theirs"}')
+
+    // Pulled while the local edit is pending: skipped.
+    await adapter.apply([winner])
+    expect((await readRecords())[0]?.name).toBe('Mine')
+
+    await adapter.settle([{ collection: YARNS, id: 'y1', outcome: 'superseded', seq: 9 }])
+    await adapter.apply([winner])
+
+    expect((await readRecords())[0]?.name).toBe('Theirs')
+    expect(await adapter.pending(50)).toEqual([])
+  })
 })
 
 describe('state', () => {

@@ -83,8 +83,20 @@ export class Sync {
             const transport = this.transport(state);
             await this.backfillOnce();
             report.pulled = await this.pull(transport, state, report);
-            const pushed = await this.push(transport, report);
+            const { pushed, lowestSuperseded } = await this.push(transport, report);
             report.pushed = pushed;
+            // A losing edit was dirty when the pull above went past the winner, so
+            // the winner was skipped and the cursor is already beyond it. The push
+            // has cleared the edit, so pulling again from just below the earliest
+            // winner lands it. Never forward: that would skip what is in between.
+            if (lowestSuperseded !== null) {
+                const cursor = Math.min(state.cursor, Math.max(0, lowestSuperseded - 1));
+                if (cursor !== state.cursor) {
+                    state.cursor = cursor;
+                    await this.adapter.saveState({ ...state });
+                }
+                report.pulled += await this.pull(transport, state, report);
+            }
             report.ok = true;
             return report;
         }
@@ -172,8 +184,13 @@ export class Sync {
             // the app shows a placeholder rather than failing the whole pull.
         }
     }
+    /**
+     * Pushes every pending change. Also returns the lowest seq the server named
+     * for an edit that lost, or null when none did: `run` pulls again from there.
+     */
     async push(transport, report) {
         let pushed = 0;
+        let lowestSuperseded = null;
         for (;;) {
             const pending = await this.adapter.pending(this.pushLimit);
             if (pending.length === 0) {
@@ -185,6 +202,8 @@ export class Sync {
             for (const result of results) {
                 if (result.outcome === 'superseded') {
                     report.superseded += 1;
+                    // The server answers a losing push with the record's current seq.
+                    lowestSuperseded = Math.min(lowestSuperseded ?? result.seq, result.seq);
                 }
                 else if (result.outcome === 'conflict') {
                     report.conflicts += 1;
@@ -197,7 +216,7 @@ export class Sync {
                 break;
             }
         }
-        return pushed;
+        return { pushed, lowestSuperseded };
     }
     /**
      * Uploads bytes the server lacks, before the records that reference them.
