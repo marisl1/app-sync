@@ -497,3 +497,98 @@ describe('backfill on run', () => {
     expect((await createSync({ adapter: plain, fetch }).run()).ok).toBe(true)
   })
 })
+
+describe('a losing edit', () => {
+  it('is replaced by the winner in the same run, though the pull had already passed it', async () => {
+    adapter.queue = [local('a', 3)]
+    const winner = remote('a', 9, '{"winner":true}')
+    const { fetch, log } = stubFetch({
+      'GET /api/yarnus/changes': [
+        // The first pull carries the winner while the local edit is still
+        // dirty, so a real adapter skips it and the cursor moves past it.
+        { body: { changes: [winner], seq: 9, hasMore: false } },
+        { body: { changes: [winner], seq: 9, hasMore: false } },
+      ],
+      'POST /api/yarnus/changes': {
+        body: { results: [{ collection: 'yarn/yarns', id: 'a', outcome: 'superseded', seq: 9 }], seq: 9 },
+      },
+    })
+
+    const report = await createSync({ adapter, fetch }).run()
+
+    // Pulled again from just below the winner, after the push settled it.
+    expect(log.filter((l) => l.startsWith('GET /api/yarnus/changes'))).toEqual([
+      'GET /api/yarnus/changes?since=0&limit=500',
+      'GET /api/yarnus/changes?since=8&limit=500',
+    ])
+    expect(adapter.calls.slice(-2)).toEqual(['settle', 'apply'])
+    expect(adapter.applied.at(-1)).toEqual([winner])
+    // Counted as pulled, so an app's arrival listener redraws.
+    expect(report.pulled).toBe(2)
+    expect(report.superseded).toBe(1)
+    expect(report.ok).toBe(true)
+  })
+
+  it('never moves the cursor forward to re-pull', async () => {
+    adapter.state = { ...adapter.state!, cursor: 4 }
+    adapter.queue = [local('a', 1)]
+    const { fetch, log } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 4, hasMore: false } },
+      'POST /api/yarnus/changes': {
+        body: { results: [{ collection: 'yarn/yarns', id: 'a', outcome: 'superseded', seq: 30 }], seq: 30 },
+      },
+    })
+
+    await createSync({ adapter, fetch }).run()
+
+    expect(log.filter((l) => l.startsWith('GET /api/yarnus/changes')).at(-1)).toBe(
+      'GET /api/yarnus/changes?since=4&limit=500',
+    )
+  })
+
+  it('pulls nothing extra when every push was taken', async () => {
+    adapter.queue = [local('a')]
+    const { fetch, log } = stubFetch({
+      'GET /api/yarnus/changes': { body: { changes: [], seq: 0, hasMore: false } },
+      'POST /api/yarnus/changes': {
+        body: { results: [{ collection: 'yarn/yarns', id: 'a', outcome: 'applied', seq: 1 }], seq: 1 },
+      },
+    })
+
+    await createSync({ adapter, fetch }).run()
+
+    expect(log.filter((l) => l.startsWith('GET /api/yarnus/changes'))).toHaveLength(1)
+  })
+})
+
+describe('a push whose answer was lost', () => {
+  it('is sent again unchanged, with its old baseSeq, which the server takes as a replay', async () => {
+    // An adapter that, like the real one, keeps a change pending until it is settled.
+    const change = local('a', 3)
+    adapter.pending = async () => (adapter.settled.length === 0 ? [change] : [])
+    const sent: unknown[] = []
+    let first = true
+    const fetch = async (_input: string, init?: RequestInit): Promise<Response> => {
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (method === 'GET') {
+        return Response.json({ changes: [], seq: 3, hasMore: false })
+      }
+      sent.push(JSON.parse(init!.body as string))
+      if (first) {
+        first = false
+        throw new TypeError('Failed to fetch')
+      }
+      return Response.json({ results: [{ collection: 'yarn/yarns', id: 'a', outcome: 'applied', seq: 4 }], seq: 4 })
+    }
+    const sync = createSync({ adapter, fetch: fetch as typeof globalThis.fetch })
+
+    expect((await sync.run()).ok).toBe(false)
+    const second = await sync.run()
+
+    expect(second.ok).toBe(true)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toEqual(sent[0])
+    expect((sent[1] as { changes: LocalChange[] }).changes[0]!.baseSeq).toBe(3)
+    expect(second.superseded).toBe(0)
+  })
+})

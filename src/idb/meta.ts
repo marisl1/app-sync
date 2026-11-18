@@ -57,8 +57,10 @@ export function nextMeta(
 export function settledMeta(existing: SyncMeta, seq: number, accepted: boolean): SyncMeta {
   return {
     ...existing,
-    // A rejected push keeps the seq it had; the winner arrives on the next pull
-    // and overwrites this row anyway.
+    // A rejected push keeps the seq it had. The winner is not on its way by
+    // itself: the pull before the push skipped it while this row was dirty and
+    // moved the cursor past it. The engine pulls again from just below the seq
+    // the server named, and that pull, finding this row clean, overwrites it.
     seq: accepted ? seq : existing.seq,
     // Cleared either way. Leaving it dirty would resend a losing edit forever.
     dirty: false,
